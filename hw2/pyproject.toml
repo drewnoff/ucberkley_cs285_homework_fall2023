@@ -25,7 +25,6 @@ ipdb = "0.13.13"
 swig = ">=4.0.2,<5.0.0"
 box2d-py = ">=2.3.5,<=2.3.8"
 
-# for PyTorch version of the HW assignments
 [tool.poetry.group.torch]
 optional=true
 [tool.poetry.group.torch.dependencies]
@@ -38,6 +37,7 @@ optional=false
 jax = ">=0.4.35"  # Make sure to check for the latest compatible version
 flax = ">=0.10.1"   # Flax is commonly used with JAX
 optax = ">=0.2.3"  # For optimization with JAX
+distrax = "^0.1.5"
 
 [tool.poetry.group.test]
 optional = true
@@ -46,7 +46,10 @@ pytest = ">=8.3.4,<9.0.0"
 
 [tool.poetry.group.dev]
 optional = true
-dependencies = { ruff = "^0.8.6" }
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.6"
+seaborn = "^0.13.2"
+
 
 
 [tool.ruff]

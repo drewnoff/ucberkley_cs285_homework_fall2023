@@ -4,6 +4,7 @@ import jax
 from typing import Callable
 import jax.numpy as jnp
 from flax import linen as nn
+import numpy as np
 
 Activation = str | Callable
 
@@ -62,7 +63,7 @@ def build_mlp(
         output_activation=output_activation
     )
 
-def from_numpy(x):
+def from_numpy(x: np.ndarray,):
     return jnp.array(x, dtype=jnp.float32)
 
 

@@ -107,7 +107,7 @@ class MLPPolicy(nn.Module):
 class MLPPolicyPG(MLPPolicy):
     """Policy class for the policy gradient algorithm."""
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=0)
     def update(
         self,
         state: train_state.TrainState,
@@ -115,14 +115,34 @@ class MLPPolicyPG(MLPPolicy):
         actions: np.ndarray,
         advantages: np.ndarray,
     ) -> tuple[train_state.TrainState, dict]:
-        """Implements the policy gradient actor update."""
+        """Implements the policy gradient actor update.
+
+        Args:
+            state: Current training state
+            obs: (N*T) x Ds tensor of observations
+            actions:  (N*T) x Da tensor of actions taken
+            advantages: (N*T) x 1 tensor of advantage estimates
+
+        Returns:
+            Updated state and metrics dictionary
+        """
         obs = jtu.from_numpy(obs) # type: ignore
         actions = jtu.from_numpy(actions) # type: ignore
         advantages = jtu.from_numpy(advantages) # type: ignore
 
         def loss_fn(params):
-            # TODO: implement the policy gradient loss
-            loss = None
+            """
+            Pseudo-loss.
+            We need a grad such that its gradient is the policy gradient.
+            Get action distribution from current policy.
+            Compute log probabilities of the actions that were actually taken.
+            Policy gradient loss is negative log prob times advantage.
+            We take the mean across the batch and negate since we want to maximize
+            """
+            dist = self.apply(params, obs)
+            neg_log_probs = -dist.log_prob(actions) # type: ignore
+            loss =  jnp.mean(neg_log_probs * advantages)
+
             return loss
 
         grad_fn = jax.value_and_grad(loss_fn)

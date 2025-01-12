@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "berkeley-cs285-hw1"
+version = "1.0.0"
+description = "hw1 assignments for UC Berkeley CS 238"
+authors = ["Your Name <your.email@example.com>"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+# Core dependencies
+mujoco = "2.2.0"
+gym = {version = "0.25.2", extras = ["classic_control"]}
+tensorboard = "2.10.0"
+tensorboardX = "2.5.1"
+matplotlib = "3.5.3"
+ipython = "7.34.0"
+moviepy = "1.0.3"
+pyvirtualdisplay = "3.0"
+opencv-python = "4.6.0.66"
+ipdb = "0.13.9"
+swig = "4.0.2"
+box2d-py = "2.3.8"
+
+# for PyTorch version of the HW assignments
+[tool.poetry.group.torch.dependencies]
+torch = "1.12.1"
+
+# for JAX version of the HW assignments
+[tool.poetry.group.jax]
+optional=true
+[tool.poetry.group.jax.dependencies]
+jax = ">=0.4.35"  # Make sure to check for the latest compatible version
+flax = ">=0.10.1"   # Flax is commonly used with JAX
+optax = ">=0.2.3"  # For optimization with JAX
+
+[tool.poetry.group.dev]
+optional = true
+dependencies = { ruff = "^0.6.6" }
+
+# Uncomment the following if you need to include specific folders in your package
+# [tool.poetry.include]
+# cs285 = "cs285/**"

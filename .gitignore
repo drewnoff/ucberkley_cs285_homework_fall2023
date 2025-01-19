@@ -131,3 +131,6 @@ dmypy.json
 
 # vscode specific
 .vscode
+
+# data
+data

@@ -106,7 +106,7 @@ ignore = [
 
 [tool.ruff.lint.flake8-quotes]
 docstring-quotes = "double"
-inline-quotes = "single"
+inline-quotes = "double"
 multiline-quotes = "double"
 
 [tool.ruff.lint.isort]

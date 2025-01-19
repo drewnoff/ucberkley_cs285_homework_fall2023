@@ -153,8 +153,9 @@ def run_training_loop(args):
 
         if args.video_log_freq != -1 and itr % args.video_log_freq == 0:
             print("\nCollecting video rollouts...")
+            _, sample_rng = jax.random.split(rng)
             eval_video_trajs = utils.sample_n_trajectories(
-                env, agent.actor, MAX_NVIDEO, max_ep_len, render=True
+                env, agent.actor, agent.policy_train_state.params, MAX_NVIDEO, max_ep_len, render=True, rng=sample_rng
             )
 
             logger.log_trajs_as_videos(
@@ -205,8 +206,7 @@ def main():
 
     args = parser.parse_args()
 
-    # create directory for logging
-    logdir_prefix = "q2_pg_"  # keep for autograder
+    logdir_prefix = "q2_pg_"
 
     data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../data")
 

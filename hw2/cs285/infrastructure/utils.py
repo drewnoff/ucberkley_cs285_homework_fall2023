@@ -1,17 +1,18 @@
 from collections import OrderedDict
 import numpy as np
 import copy
-from cs285.networks.policies import MLPPolicy
+from cs285.networks.policies_jax import MLPPolicy
 import gym
 import cv2
-from cs285.infrastructure import pytorch_util as ptu
+from cs285.infrastructure import jax_util as ju
+import jax
 
 ############################################
 ############################################
 
 
 def sample_trajectory(
-    env: gym.Env, policy: MLPPolicy, max_length: int, render: bool = False
+    env: gym.Env, policy: MLPPolicy, params: dict, max_length: int, render: bool = False, rng = jax.random.PRNGKey(0)
 ) -> dict[str, np.ndarray]:
     """Sample a rollout in the environment from a policy."""
     ob = env.reset()
@@ -28,15 +29,15 @@ def sample_trajectory(
                 cv2.resize(img, dsize=(250, 250), interpolation=cv2.INTER_CUBIC)
             )
 
-        # TODO use the most recent ob and the policy to decide what to do
-        ac: np.ndarray = None
+        ac: np.ndarray = ju.to_numpy(policy.get_action(ob, params, rng))
+        try:
+            next_ob, rew, done, _, _ = env.step(ac)
+        except AttributeError:
+                        print("Warning: issues with numpy version compatibility, skipping this step")
+                        continue
 
-        # TODO: use that action to take a step in the environment
-        next_ob, rew, done, _ = None, None, None, None
-
-        # TODO rollout can end due to done, or due to max_length
         steps += 1
-        rollout_done: bool = None
+        rollout_done: bool = done or steps >= max_length
 
         # record result of taking that action
         obs.append(ob)
@@ -64,16 +65,18 @@ def sample_trajectory(
 def sample_trajectories(
     env: gym.Env,
     policy: MLPPolicy,
+    params: dict,
     min_timesteps_per_batch: int,
     max_length: int,
     render: bool = False,
+    rng = jax.random.PRNGKey(0),
 ) -> tuple[list[dict[str, np.ndarray]], int]:
     """Collect rollouts using policy until we have collected min_timesteps_per_batch steps."""
     timesteps_this_batch = 0
     trajs = []
     while timesteps_this_batch < min_timesteps_per_batch:
         # collect rollout
-        traj = sample_trajectory(env, policy, max_length, render)
+        traj = sample_trajectory(env, policy, params, max_length, render, rng)
         trajs.append(traj)
 
         # count steps
@@ -82,13 +85,13 @@ def sample_trajectories(
 
 
 def sample_n_trajectories(
-    env: gym.Env, policy: MLPPolicy, ntraj: int, max_length: int, render: bool = False
+    env: gym.Env, policy: MLPPolicy, params: dict, ntraj: int, max_length: int, render: bool = False, rng = jax.random.PRNGKey(0)
 ):
     """Collect ntraj rollouts."""
     trajs = []
     for _ in range(ntraj):
         # collect rollout
-        traj = sample_trajectory(env, policy, max_length, render)
+        traj = sample_trajectory(env, policy, params, max_length, render, rng)
         trajs.append(traj)
     return trajs
 

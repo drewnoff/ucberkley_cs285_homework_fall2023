@@ -9,13 +9,13 @@ import numpy as np
 Activation = str | Callable
 
 _str_to_activation = {
-    'relu': nn.relu,
-    'tanh': nn.tanh,
-    'leaky_relu': lambda x: nn.leaky_relu(x, negative_slope=0.01),
-    'sigmoid': nn.sigmoid,
-    'selu': nn.selu,
-    'softplus': nn.softplus,
-    'identity': lambda x: x,
+    "relu": nn.relu,
+    "tanh": nn.tanh,
+    "leaky_relu": lambda x: nn.leaky_relu(x, negative_slope=0.01),
+    "sigmoid": nn.sigmoid,
+    "selu": nn.selu,
+    "softplus": nn.softplus,
+    "identity": lambda x: x,
 }
 
 
@@ -24,8 +24,8 @@ class MLP(nn.Module):
     output_size: int
     n_layers: int
     size: int
-    activation: Activation = 'tanh'
-    output_activation: Activation = 'identity'
+    activation: Activation = "tanh"
+    output_activation: Activation = "identity"
 
     @nn.compact
     def __call__(self, x):

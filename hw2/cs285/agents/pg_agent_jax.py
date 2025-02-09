@@ -5,7 +5,7 @@ import jax
 
 from cs285.networks.policies_jax import MLPPolicyPG
 
-# from cs285.networks.critics_jax import ValueCritic
+from cs285.networks.critics_jax import ValueCritic
 from jax._src.typing import Array
 
 
@@ -58,9 +58,9 @@ class PGAgent:
         learning_rate: float,
         use_reward_to_go: bool = False,
         gamma: float = 1.0,
-        # use_baseline: bool = False,
-        # baseline_learning_rate: float | None = None,
-        # baseline_gradient_steps: int | None = None,
+        use_baseline: bool = False,
+        baseline_learning_rate: float | None = None,
+        baseline_gradient_steps: int | None = None,
         # gae_lambda: float | None = None,
         normalize_advantages: bool = False,
         rng: Array = jax.random.PRNGKey(0),
@@ -72,6 +72,14 @@ class PGAgent:
             n_layers=n_layers,
             layer_size=layer_size,
         )
+
+        if use_baseline:
+            self.critic = ValueCritic(
+                ob_dim, n_layers, layer_size, baseline_learning_rate
+            )
+            self.baseline_gradient_steps = baseline_gradient_steps
+        else:
+            self.critic = None
 
         self.rng, init_rng = jax.random.split(rng)
         self.policy_train_state = self.actor.create_train_state(init_rng, learning_rate)

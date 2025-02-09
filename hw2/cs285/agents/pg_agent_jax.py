@@ -18,18 +18,13 @@ def calculate_discounted_return(rewards: np.ndarray, gamma: float) -> np.ndarray
 
 
 def calculate_discounted_reward_to_go(rewards: np.ndarray, gamma: float) -> np.ndarray:
-    """Calculate discounted reward-to-go."""
+    """Calculate discounted reward-to-go more efficiently."""
     T = len(rewards)
     rtg = np.zeros_like(rewards)
-
-    for t in range(T):
-        future_rewards = 0
-        power = 0
-        for future_reward in rewards[t:]:
-            future_rewards += (gamma**power) * future_reward
-            power += 1
-        rtg[t] = future_rewards
-
+    running_sum = 0
+    for t in reversed(range(T)):
+        running_sum = rewards[t] + gamma * running_sum
+        rtg[t] = running_sum
     return rtg
 
 
@@ -90,7 +85,7 @@ class PGAgent:
         obs: Sequence[np.ndarray],
         actions: Sequence[np.ndarray],
         rewards: Sequence[np.ndarray],
-        # terminals: Sequence[np.ndarray],
+        terminals: Sequence[np.ndarray] | None = None,
     ) -> dict:
         """The train step for PG involves updating its actor using the given observations/actions and the calculated
         qvals/advantages that come from the seen rewards.
@@ -104,8 +99,13 @@ class PGAgent:
         flat_obs = np.concatenate(obs)
         flat_actions = np.concatenate(actions)
         flat_qvals = np.concatenate(q_values)
+        flat_rewards = np.concatenate(rewards)
+        flat_terminals = np.concatenate(terminals) if terminals is not None else None
 
         advantages = flat_qvals
+        advantages: np.ndarray = self._estimate_advantage(
+            flat_obs, flat_rewards, flat_qvals, flat_terminals
+        )
         if self.normalize_advantages:
             advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-8)
 
@@ -135,7 +135,21 @@ class PGAgent:
 
         return q_values
 
+    def _estimate_advantage(
+        self,
+        obs: np.ndarray,
+        rewards: np.ndarray,
+        q_values: np.ndarray,
+        terminals: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Computes advantages by (possibly) subtracting a value baseline from the estimated Q-values.
+
+        Operates on flat 1D NumPy arrays.
+        """
+        # TODO actual implementation
+        return q_values
 
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """Sample action from policy."""
-        return self.actor.get_action(obs, self.policy_train_state.params, self.rng)
+        self.rng, rng = jax.random.split(self.rng)
+        return self.actor.get_action(obs, self.policy_train_state.params, rng)

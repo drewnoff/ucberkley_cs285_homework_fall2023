@@ -1,10 +1,11 @@
 from __future__ import annotations
 from collections.abc import Sequence
+from typing import Any
 import numpy as np
 import jax
+from cs285.infrastructure import jax_util as jtu
 
 from cs285.networks.policies_jax import MLPPolicyPG
-
 from cs285.networks.critics_jax import ValueCritic
 from jax._src.typing import Array
 
@@ -45,7 +46,6 @@ class PGAgent:
         use_reward_to_go: Whether to use reward-to-go formulation
         normalize_advantages: Whether to normalize advantages
         rng: JAX random number generator key
-
     """
 
     def __init__(
@@ -59,8 +59,8 @@ class PGAgent:
         use_reward_to_go: bool = False,
         gamma: float = 1.0,
         use_baseline: bool = False,
-        baseline_learning_rate: float | None = None,
-        baseline_gradient_steps: int | None = None,
+        baseline_learning_rate: float = 1e-3,
+        baseline_gradient_steps: int = 1,
         # gae_lambda: float | None = None,
         normalize_advantages: bool = False,
         rng: Array = jax.random.PRNGKey(0),
@@ -74,12 +74,12 @@ class PGAgent:
         )
 
         if use_baseline:
-            self.critic = ValueCritic(
-                ob_dim, n_layers, layer_size, baseline_learning_rate
-            )
+            self.critic = ValueCritic(ob_dim, n_layers, layer_size)
             self.baseline_gradient_steps = baseline_gradient_steps
+            self.critic_train_state = self.critic.create_train_state(rng, learning_rate=baseline_learning_rate)
         else:
             self.critic = None
+            self.critic_train_state = None
 
         self.rng, init_rng = jax.random.split(rng)
         self.policy_train_state = self.actor.create_train_state(init_rng, learning_rate)
@@ -101,7 +101,7 @@ class PGAgent:
         Each input is a list of NumPy arrays, where each array corresponds to a single trajectory.
         The batch size is the total number of samples across all trajectories (i.e. the sum of the lengths of all the arrays).
         """
-        # step 1: calculate Q values of each (s_t, a_t) point, using rewards (r_0, ..., r_t, ..., r_T)
+        # Step 1: calculate Q-values of each (s_t, a_t) point, using rewards (r_0, ..., r_t, ..., r_T)
         q_values: Sequence[np.ndarray] = self._calculate_q_vals(rewards)
 
         flat_obs = np.concatenate(obs)
@@ -110,37 +110,36 @@ class PGAgent:
         flat_rewards = np.concatenate(rewards)
         flat_terminals = np.concatenate(terminals) if terminals is not None else None
 
-        advantages = flat_qvals
-        advantages: np.ndarray = self._estimate_advantage(
-            flat_obs, flat_rewards, flat_qvals, flat_terminals
-        )
+        # Step 2: estimate advantages (possibly using the critic baseline)
+        advantages, advantages_info = self._estimate_advantage(flat_obs, flat_rewards, flat_qvals, flat_terminals)
         if self.normalize_advantages:
             advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-8)
 
+        # Step 3: update the policy
         self.policy_train_state, info = self.actor.update(
             self.policy_train_state,
             flat_obs,
             flat_actions,
             advantages,
         )
+        if advantages_info:
+            info.update(advantages_info)
 
         return info
 
     def _calculate_q_vals(self, rewards: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-        """Monte Carlo estimation of Q values."""
+        """Monte Carlo estimation of Q-values."""
         q_values = []
-
         if not self.use_reward_to_go:
-            # Case 1: trajectory-based PG
+            # Trajectory-based PG: use full discounted return for all time steps in the trajectory.
             for trajectory_rewards in rewards:
                 discounted_returns = calculate_discounted_return(trajectory_rewards, self.gamma)
                 q_values.append(discounted_returns)
         else:
-            # Case 2: reward-to-go PG
+            # Reward-to-go PG: use the discounted sum of rewards from time t onward.
             for trajectory_rewards in rewards:
                 discounted_rtg = calculate_discounted_reward_to_go(trajectory_rewards, self.gamma)
                 q_values.append(discounted_rtg)
-
         return q_values
 
     def _estimate_advantage(
@@ -149,15 +148,36 @@ class PGAgent:
         rewards: np.ndarray,
         q_values: np.ndarray,
         terminals: np.ndarray | None = None,
-    ) -> np.ndarray:
-        """Computes advantages by (possibly) subtracting a value baseline from the estimated Q-values.
-
-        Operates on flat 1D NumPy arrays.
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         """
-        # TODO actual implementation
-        return q_values
+        Computes advantages by subtracting a learned baseline from the estimated Q-values.
+        If a critic is used, it is updated for a number of gradient steps (baseline_gradient_steps)
+        and then used to predict the state value for each observation. The advantage is then computed as:
+
+            advantage = Q(s, a) - V(s)
+
+        If no critic is used, the Q-values are returned directly.
+        """
+        # If using a critic (baseline), update it and compute advantages.
+        metrics = {}
+        if self.critic is not None:
+            obs_jnp = jtu.from_numpy(obs)
+            q_values_jnp = jtu.from_numpy(obs)
+
+            for _ in range(self.baseline_gradient_steps):
+                self.critic_train_state, loss = self.critic.update(self.critic_train_state, obs_jnp, q_values_jnp)
+                metrics = {
+                    "Critic Loss": loss,
+                }
+
+            baseline_predictions = self.critic.apply_fn(self.critic_train_state.params, obs_jnp)  # type: ignore
+            # Compute the advantage by subtracting the baseline predictions from the Q-values.
+            advantages = q_values - np.array(baseline_predictions)
+            return advantages, metrics
+        # No baseline used, so the advantage is simply the Q-value.
+        return q_values, metrics
 
     def get_action(self, obs: np.ndarray) -> np.ndarray:
-        """Sample action from policy."""
+        """Sample action from the policy."""
         self.rng, rng = jax.random.split(self.rng)
         return self.actor.get_action(obs, self.policy_train_state.params, rng)

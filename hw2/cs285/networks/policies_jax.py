@@ -150,6 +150,6 @@ class MLPPolicyPG(MLPPolicy):
         state = state.apply_gradients(grads=grads)
 
         metrics = {
-            'Actor Loss': loss,
+            "Actor Loss": loss,
         }
         return state, metrics

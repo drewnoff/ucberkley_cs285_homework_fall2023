@@ -2,7 +2,6 @@ from __future__ import annotations
 from functools import partial
 import jax
 import jax.numpy as jnp
-import numpy as np
 import flax.linen as nn
 from flax.training import train_state
 import optax
@@ -133,21 +132,19 @@ class DistributionalValueCritic(nn.Module):
         )
 
     @partial(jax.jit, static_argnums=0)
-    def get_value(self, obs: np.ndarray, params: dict) -> np.ndarray:
+    def get_value(self, obs: jnp.ndarray, params: dict) -> jnp.ndarray:
         """
         Returns a deterministic value prediction (the mean of the distribution)
         for the given observation.
         """
-        obs = jtu.from_numpy(obs) # type: ignore
         dist = self.apply(params, obs)
         return dist.mean()  # type: ignore
 
     @partial(jax.jit, static_argnums=0)
-    def sample_value(self, obs: np.ndarray, params: dict, rng_key) -> np.ndarray:
+    def sample_value(self, obs: jnp.ndarray, params: dict, rng_key) -> jnp.ndarray:
         """
         Returns a stochastic value prediction by sampling from the distribution.
         """
-        obs = jtu.from_numpy(obs) # type: ignore
         dist = self.apply(params, obs)
         return dist.sample(seed=rng_key) # type: ignore
 

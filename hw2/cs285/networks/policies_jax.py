@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from flax.training import train_state
-import numpy as np
 import optax
 from functools import partial
 import distrax
@@ -65,7 +64,7 @@ class MLPPolicy(nn.Module):
             return distrax.MultivariateNormalDiag(loc=mean, scale_diag=std)
 
     @partial(jax.jit, static_argnums=0)
-    def get_action(self, obs: np.ndarray, params: dict, rng_key) -> np.ndarray:
+    def get_action(self, obs: jnp.ndarray, params: dict, rng_key) -> jnp.ndarray:
         """Samples a single action from the policy for the given observation.
 
         Note: This function is not differentiable due to the sampling operation.
@@ -76,7 +75,7 @@ class MLPPolicy(nn.Module):
             rng_key: JAX random key for sampling
 
         Returns:
-            np.ndarray: Sampled action
+            jnp.ndarray: Sampled action
         """
         dist = self.apply(params, obs)
         action = dist.sample(seed=rng_key) # type: ignore
@@ -95,8 +94,8 @@ class MLPPolicy(nn.Module):
     def update(
             self,
             state: train_state.TrainState,
-            obs: np.ndarray,
-            actions: np.ndarray,
+            obs: jnp.ndarray,
+            actions: jnp.ndarray,
             *args,
             **kwargs
     ) -> tuple[train_state.TrainState, dict]:
@@ -111,9 +110,9 @@ class MLPPolicyPG(MLPPolicy):
     def update(
         self,
         state: train_state.TrainState,
-        obs: np.ndarray,
-        actions: np.ndarray,
-        advantages: np.ndarray,
+        obs: jnp.ndarray,
+        actions: jnp.ndarray,
+        advantages: jnp.ndarray,
     ) -> tuple[train_state.TrainState, dict]:
         """Implements the policy gradient actor update.
 
@@ -126,10 +125,6 @@ class MLPPolicyPG(MLPPolicy):
         Returns:
             Updated state and metrics dictionary
         """
-        obs = jtu.from_numpy(obs) # type: ignore
-        actions = jtu.from_numpy(actions) # type: ignore
-        advantages = jtu.from_numpy(advantages) # type: ignore
-
         def loss_fn(params):
             """
             Pseudo-loss.

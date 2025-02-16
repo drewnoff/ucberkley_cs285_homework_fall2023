@@ -93,10 +93,10 @@ class PGAgent:
         # Step 1: Compute Q-values for each (s_t, a_t) in each trajectory.
         q_values: Sequence[np.ndarray] = self._calculate_q_vals(rewards)
 
-        flat_obs = np.concatenate(obs)
-        flat_actions = np.concatenate(actions)
-        flat_qvals = np.concatenate(q_values)
-        flat_rewards = np.concatenate(rewards)
+        flat_obs = jtu.from_numpy(np.concatenate(obs))
+        flat_actions = jtu.from_numpy(np.concatenate(actions))
+        flat_qvals = jtu.from_numpy(np.concatenate(q_values))
+        flat_rewards = jtu.from_numpy(np.concatenate(rewards))
 
         # # If terminals are not provided, derive them for each trajectory.
         # if terminals is None:
@@ -153,39 +153,36 @@ class PGAgent:
         return q_values
     def _estimate_advantage(
         self,
-        obs: np.ndarray,
-        rewards: np.ndarray,
-        q_values: np.ndarray,
+        obs: jnp.ndarray,
+        rewards: jnp.ndarray,
+        q_values: jnp.ndarray,
 #        terminals: np.ndarray,
-    ) -> tuple[np.ndarray, dict[str, Any]]:
+    ) -> tuple[jnp.ndarray, dict[str, Any]]:
         metrics: dict[str, Any] = {}
         if not self.critic:
             return q_values, metrics
 
-        obs_jnp = jtu.from_numpy(obs)
-        q_values_jnp = jtu.from_numpy(q_values)
-
         def update_critic(targets: jnp.ndarray) -> float:
             total_loss = 0.0
             for _ in range(self.baseline_gradient_steps):
-                self.critic_train_state, loss = self.critic.update(
-                    self.critic_train_state, obs_jnp, targets
+                self.critic_train_state, loss = self.critic.update( # type: ignore
+                    self.critic_train_state, obs, targets
                 )
                 total_loss += loss
             return total_loss / self.baseline_gradient_steps
 
         # 1) Train the critic to predict the same returns used in advantage
-        metrics["Critic Loss"] = update_critic(q_values_jnp)
+        metrics["Critic Loss"] = update_critic(q_values)
 
         # 2) Recompute the baseline after updating the critic
-        v_s_updated = self.critic.apply(self.critic_train_state.params, obs_jnp)
+        v_s_updated = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
 
         # 3) Advantage = Q(s) - V(s)
-        advantages_jnp = q_values_jnp - v_s_updated
+        advantages_jnp = q_values - v_s_updated
 
         return jtu.to_numpy(advantages_jnp), metrics
 
-    def get_action(self, obs: np.ndarray) -> np.ndarray:
+    def get_action(self, obs: jnp.ndarray) -> jnp.ndarray:
         """
         Sample an action from the policy given an observation.
 

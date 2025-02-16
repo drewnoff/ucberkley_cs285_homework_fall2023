@@ -48,10 +48,11 @@ class PGAgent:
         learning_rate: float,
         use_reward_to_go: bool = False,
         gamma: float = 1.0,
-        use_baseline: bool = True,  # baseline now always used
+        use_baseline: bool = False,
         baseline_learning_rate: float = 1e-3,
         baseline_gradient_steps: int = 1,
         normalize_advantages: bool = False,
+        use_bootstrapped_td: bool = False,
         rng = jax.random.PRNGKey(0),
     ) -> None:
         """
@@ -79,6 +80,7 @@ class PGAgent:
         self.gamma = gamma
         self.use_reward_to_go = use_reward_to_go
         self.normalize_advantages = normalize_advantages
+        self.use_bootstrapped_td = use_bootstrapped_td
 
     def update(
         self,
@@ -98,21 +100,22 @@ class PGAgent:
         flat_qvals = jtu.from_numpy(np.concatenate(q_values))
         flat_rewards = jtu.from_numpy(np.concatenate(rewards))
 
-        # # If terminals are not provided, derive them for each trajectory.
-        # if terminals is None:
-        #     terminals = []
-        #     for r in rewards:
-        #         t = np.zeros_like(r, dtype=np.float32)
-        #         t[-1] = 1.0
-        #         terminals.append(t)
-        # flat_terminals = np.concatenate(terminals)
+        # If terminals are not provided, derive them per trajectory.
+        if terminals is None:
+            terminals = []
+            for r in rewards:
+                t = np.zeros_like(r, dtype=np.float32)
+                t[-1] = 1.0  # last step is terminal
+                terminals.append(t)
+        # Flatten and cast terminals to float (in case they were bool)
+        flat_terminals = jtu.from_numpy(np.concatenate(terminals).astype(np.float32))
 
         # Step 2: Estimate advantages (using the state-value baseline).
         advantages, advantages_info = self._estimate_advantage(
             flat_obs,
             flat_rewards,
             flat_qvals,
-            # flat_terminals
+            flat_terminals,
         )
         if self.normalize_advantages:
             advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-8)
@@ -151,12 +154,13 @@ class PGAgent:
                 discounted_rtg = calculate_discounted_reward_to_go(trajectory_rewards, self.gamma)
                 q_values.append(discounted_rtg)
         return q_values
+
     def _estimate_advantage(
         self,
         obs: jnp.ndarray,
         rewards: jnp.ndarray,
         q_values: jnp.ndarray,
-#        terminals: np.ndarray,
+        terminals: jnp.ndarray,  # now required and flattened
     ) -> tuple[jnp.ndarray, dict[str, Any]]:
         metrics: dict[str, Any] = {}
         if not self.critic:
@@ -171,14 +175,27 @@ class PGAgent:
                 total_loss += loss
             return total_loss / self.baseline_gradient_steps
 
-        # 1) Train the critic to predict the same returns used in advantage
-        metrics["Critic Loss"] = update_critic(q_values)
-
-        # 2) Recompute the baseline after updating the critic
-        v_s_updated = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
-
-        # 3) Advantage = Q(s) - V(s)
-        advantages_jnp = q_values - v_s_updated
+        if self.use_bootstrapped_td:
+            # --- Bootstrapped TD advantage estimation ---
+            # 1) Compute the current state value estimates.
+            v = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
+            # 2) To obtain V(s') for each transition, shift v one step ahead.
+            #    For the last time-step of each trajectory (where terminals==1), we want V(s')=0.
+            v_shifted = jnp.concatenate([v[1:], jnp.array([0.0])]) # type: ignore
+            v_next = jnp.where(terminals, 0.0, v_shifted)
+            # 3) The one-step TD target:
+            td_target = rewards + self.gamma * v_next
+            # 4) Update the critic to fit the bootstrapped targets.
+            metrics["Critic Loss"] = update_critic(td_target)
+            # 5) Recompute the baseline after the update.
+            v_updated = self.critic.apply(self.critic_train_state.params, obs)
+            # 6) The TD error becomes the advantage.
+            advantages_jnp = td_target - v_updated
+        else:
+            # --- Monte Carlo advantage estimation ---
+            metrics["Critic Loss"] = update_critic(q_values)
+            v_updated = self.critic.apply(self.critic_train_state.params, obs)
+            advantages_jnp = q_values - v_updated
 
         return jtu.to_numpy(advantages_jnp), metrics
 
@@ -194,51 +211,3 @@ class PGAgent:
         """
         self.rng, rng = jax.random.split(self.rng)
         return self.actor.get_action(obs, self.policy_train_state.params, rng)
-
-
-    # def _estimate_advantage(
-    #     self,
-    #     obs: np.ndarray,
-    #     rewards: np.ndarray,
-    #     q_values: np.ndarray,
-    #     terminals: np.ndarray,
-    # ) -> tuple[np.ndarray, dict[str, Any]]:
-    #     """
-    #     Estimate advantages using the state-value function baseline.
-    #     """
-    #     metrics: dict[str, Any] = {}
-    #     obs_jnp, q_values_jnp = jtu.from_numpy(obs), jtu.from_numpy(q_values)
-    #     if not self.critic:
-    #         return q_values, metrics
-
-    #     def update_critic(targets: jnp.ndarray) -> float:
-    #         total_loss = 0.0
-    #         for _ in range(self.baseline_gradient_steps):
-    #             self.critic_train_state, loss = self.critic.update(
-    #                 self.critic_train_state, obs_jnp, targets
-    #             )
-    #             total_loss += loss
-    #         return total_loss / self.baseline_gradient_steps
-
-    #     # Compute next observations: for terminal states, reuse the current observation.
-    #     next_obs_jnp = jtu.from_numpy(
-    #         np.where(terminals[:-1, None] == 0, obs[1:], obs[:-1])
-    #     )
-    #     next_obs_jnp = jnp.vstack([next_obs_jnp, obs[-1]])  # Ensure the last obs is copied
-
-    #     rewards_jnp = jtu.from_numpy(rewards)
-    #     terminals_jnp = jtu.from_numpy(terminals).astype(jnp.float32)
-
-    #     # Step 1: Compute TD targets using current critic estimates for next states.
-    #     v_next = self.critic.apply(self.critic_train_state.params, next_obs_jnp)
-    #     td_target = rewards_jnp + self.gamma * v_next * (1.0 - terminals_jnp)
-
-    #     # Step 2: Update critic parameters using the computed TD targets.
-    #     metrics["Critic Loss"] = update_critic(td_target)
-
-    #     # Step 3: Recompute the value estimates with the updated critic parameters.
-    #     v_s_updated = self.critic.apply(self.critic_train_state.params, obs_jnp)
-    #     advantages_jnp = q_values_jnp - v_s_updated
-
-    #     return jtu.to_numpy(advantages_jnp), metrics
-

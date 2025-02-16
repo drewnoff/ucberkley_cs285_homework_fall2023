@@ -45,6 +45,7 @@ def run_training_loop(args):
         use_baseline=args.use_baseline,
         baseline_learning_rate=args.baseline_learning_rate,
         baseline_gradient_steps=args.baseline_gradient_steps,
+        use_bootstrapped_td=args.use_bootstrapped_td,
         rng=rng,
     )
 
@@ -182,6 +183,7 @@ def main():
     parser.add_argument("--use_baseline", action="store_true")
     parser.add_argument("--baseline_learning_rate", "-blr", type=float, default=5e-3)
     parser.add_argument("--baseline_gradient_steps", "-bgs", type=int, default=5)
+    parser.add_argument("--use_bootstrapped_td", "-td", action="store_true")
     parser.add_argument("--gae_lambda", type=float, default=None)
     parser.add_argument("--normalize_advantages", "-na", action="store_true")
     parser.add_argument(

@@ -42,6 +42,9 @@ def run_training_loop(args):
         use_reward_to_go=args.use_reward_to_go,
         gamma=args.discount,
         normalize_advantages=args.normalize_advantages,
+        use_baseline=args.use_baseline,
+        baseline_learning_rate=args.baseline_learning_rate,
+        baseline_gradient_steps=args.baseline_gradient_steps,
         rng=rng,
     )
 

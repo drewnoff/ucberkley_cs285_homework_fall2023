@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import jax
+import jax.numpy as jnp
 import pytest
 import numpy as np
 
@@ -95,9 +97,9 @@ def test_update_basic(basic_agent):
     rewards = [np.arange(1, T + 1).astype(np.float32)]
 
     info = basic_agent.update(obs, actions, rewards)
-    assert 'Actor Loss' in info
-    assert info['Actor Loss'].shape == ()
-    assert info['Actor Loss'] >= 0.0
+    assert "Actor Loss" in info
+    assert info["Actor Loss"].shape == ()
+    assert info["Actor Loss"] >= 0.0
 
 
 def test_multiple_trajectories(basic_agent):
@@ -107,6 +109,90 @@ def test_multiple_trajectories(basic_agent):
     rewards = [np.array([1.0, 2.0]), np.array([1.0, 2.0, 3.0])]
 
     info = basic_agent.update(obs, actions, rewards)
-    assert 'Actor Loss' in info
-    assert info['Actor Loss'].shape == ()
-    assert info['Actor Loss'] >= 0.0
+    assert "Actor Loss" in info
+    assert info["Actor Loss"].shape == ()
+    assert info["Actor Loss"] >= 0.0
+
+
+def test_baseline_critic_update_with_terminals():
+    """Test critic update when terminals are provided (TD targets)."""
+    agent = PGAgent(
+        ob_dim=OB_DIM,
+        ac_dim=AC_DIM,
+        discrete=True,
+        n_layers=2,
+        layer_size=64,
+        learning_rate=1e-3,
+        use_reward_to_go=True,
+        gamma=0.99,
+        use_baseline=True,
+        baseline_learning_rate=1e-3,
+        baseline_gradient_steps=1,
+        normalize_advantages=False,
+        rng=jax.random.PRNGKey(0),
+    )
+    T = 3
+    obs = [np.random.randn(T, OB_DIM)]
+    actions = [np.random.randint(0, AC_DIM, size=(T,))]
+    rewards = [np.array([1.0, 2.0, 3.0], dtype=np.float32)]
+    terminals = [np.array([0, 0, 1], dtype=np.float32)]  # Terminate at last step
+
+    info = agent.update(obs, actions, rewards, terminals)
+    assert "Critic Loss" in info
+    assert info["Critic Loss"] >= 0.0
+
+
+def test_baseline_critic_update_without_terminals():
+    """Test critic update without terminals (Q-value targets)."""
+    agent = PGAgent(
+        ob_dim=OB_DIM,
+        ac_dim=AC_DIM,
+        discrete=True,
+        n_layers=2,
+        layer_size=64,
+        learning_rate=1e-3,
+        use_reward_to_go=False,
+        gamma=0.99,
+        use_baseline=True,
+        baseline_learning_rate=1e-3,
+        baseline_gradient_steps=2,
+        normalize_advantages=False,
+        rng=jax.random.PRNGKey(0),
+    )
+    T = 3
+    obs = [np.random.randn(T, OB_DIM)]
+    actions = [np.random.randint(0, AC_DIM, size=(T,))]
+    rewards = [np.array([1.0, 2.0, 3.0], dtype=np.float32)]
+
+    info = agent.update(obs, actions, rewards, terminals=None)
+    assert "Critic Loss" in info
+    assert info["Critic Loss"] >= 0.0
+
+
+def test_baseline_multiple_gradient_steps():
+    """Ensure critic is updated multiple times per update."""
+    gradient_steps = 3
+    agent = PGAgent(
+        ob_dim=OB_DIM,
+        ac_dim=AC_DIM,
+        discrete=True,
+        n_layers=2,
+        layer_size=64,
+        learning_rate=1e-3,
+        use_reward_to_go=False,
+        gamma=0.99,
+        use_baseline=True,
+        baseline_learning_rate=1e-3,
+        baseline_gradient_steps=gradient_steps,
+        normalize_advantages=False,
+        rng=jax.random.PRNGKey(0),
+    )
+    T = 2
+    obs = [np.random.randn(T, OB_DIM)]
+    actions = [np.random.randint(0, AC_DIM, size=T)]
+    rewards = [np.array([1.0, 2.0], dtype=np.float32)]
+
+    info = agent.update(obs, actions, rewards)
+    assert "Critic Loss" in info
+    assert info["Critic Loss"] >= 0.0
+

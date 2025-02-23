@@ -4,40 +4,62 @@ from typing import Any
 import numpy as np
 import jax
 import jax.numpy as jnp
-from cs285.infrastructure import jax_util as jtu
 
 from cs285.networks.policies_jax import MLPPolicyPG
 from cs285.networks.critics_jax import ValueCritic
 
 
-def calculate_discounted_return(rewards: np.ndarray, gamma: float) -> np.ndarray:
+def calculate_discounted_return(rewards: jnp.ndarray, gamma: float) -> jnp.ndarray:
     """
-    Compute the full-trajectory discounted return and repeat it for each time step.
+    Compute the full-trajectory discounted return and repeat it for each time step using JAX.
     """
-    T = len(rewards)
-    discount_factors = gamma ** np.arange(T)
-    discounted_return = np.sum(rewards * discount_factors)
-    return np.full_like(rewards, discounted_return)
+    T = rewards.shape[0]
+    discount_factors = gamma ** jnp.arange(T)
+    discounted_return = jnp.sum(rewards * discount_factors)
+    return jnp.full_like(rewards, discounted_return)
 
 
-def calculate_discounted_reward_to_go(rewards: np.ndarray, gamma: float) -> np.ndarray:
+def calculate_discounted_reward_to_go(rewards: jnp.ndarray, gamma: float) -> jnp.ndarray:
     """
-    Compute the discounted reward-to-go for each time step in the trajectory.
+    Compute the discounted reward-to-go for each time step using JAX's scan.
     """
-    T = len(rewards)
-    rtg = np.zeros_like(rewards)
-    running_sum = 0.0
-    for t in reversed(range(T)):
-        running_sum = rewards[t] + gamma * running_sum
-        rtg[t] = running_sum
-    return rtg
+    def scan_fn(carry, r):
+        new_carry = r + gamma * carry
+        return new_carry, new_carry
+    # Reverse the rewards so that we scan from the last to the first timestep.
+    _, rtg = jax.lax.scan(scan_fn, 0.0, rewards[::-1])
+    return rtg[::-1]
+
+
+def compute_gae(rewards: jnp.ndarray, v: jnp.ndarray, terminals: jnp.ndarray, gamma: float, lam: float) -> jnp.ndarray:
+    """
+    Compute the Generalized Advantage Estimation (GAE) using JAX's scan.
+    """
+    # Append a dummy V(s_{T+1}) = 0 for simpler recursive computation.
+    v_extended = jnp.concatenate([v, jnp.zeros((1,), dtype=v.dtype)])
+
+    def scan_fn(carry, inputs):
+        r, vt, vt_next, term = inputs
+        delta = r + gamma * vt_next * (1 - term) - vt
+        new_carry = delta + gamma * lam * carry * (1 - term)
+        return new_carry, new_carry
+
+    # Reverse inputs to iterate from the end of the trajectory.
+    inputs = (
+        rewards[::-1],
+        v_extended[:-1][::-1],
+        v_extended[1:][::-1],
+        terminals[::-1]
+    )
+    # Correctly unpack the scan outputs: (final_carry, stacked_outputs)
+    _, advantages_rev = jax.lax.scan(scan_fn, 0.0, inputs)
+    return advantages_rev[::-1]
 
 
 class PGAgent:
     """
     Policy Gradient Agent with state-value baseline implemented in JAX.
     """
-
     def __init__(
         self,
         ob_dim: int,
@@ -55,9 +77,6 @@ class PGAgent:
         gae_lambda: float | None = None,
         rng = jax.random.PRNGKey(0),
     ) -> None:
-        """
-        Initialize the PGAgent.
-        """
         self.actor = MLPPolicyPG(
             ac_dim=ac_dim,
             ob_dim=ob_dim,
@@ -92,27 +111,23 @@ class PGAgent:
         """
         Update the policy network using trajectories.
         """
-        # Step 1: Compute Q-values for each (s_t, a_t) in each trajectory.
-        q_values: Sequence[np.ndarray] = self._calculate_q_vals(rewards)
+        # Step 1: Compute Q-values for each trajectory.
+        q_values = self._calculate_q_vals(rewards)
 
-        # flatten the lists of arrays into single arrays, so that the rest of the code can be written in a vectorized
-        # way. obs, actions, rewards, terminals, and q_values should all be arrays with a leading dimension of `batch_size`
-        # beyond this point.
-        flat_obs = jtu.from_numpy(np.concatenate(obs))
-        flat_actions = jtu.from_numpy(np.concatenate(actions))
-        flat_qvals = jtu.from_numpy(np.concatenate(q_values))
-        flat_rewards = jtu.from_numpy(np.concatenate(rewards))
+        flat_obs = jnp.concatenate([jnp.asarray(o) for o in obs])
+        flat_actions = jnp.concatenate([jnp.asarray(a) for a in actions])
+        flat_qvals = jnp.concatenate(q_values)
+        flat_rewards = jnp.concatenate([jnp.asarray(r) for r in rewards])
 
-        # If terminals are not provided, derive them per trajectory.
         if terminals is None:
             terminals = []
             for r in rewards:
                 t = np.zeros_like(r, dtype=np.float32)
-                t[-1] = 1.0  # last step is terminal
+                t[-1] = 1.0  # mark last timestep as terminal
                 terminals.append(t)
-        flat_terminals = jtu.from_numpy(np.concatenate(terminals).astype(np.float32))
+        flat_terminals = jnp.concatenate([jnp.asarray(t, dtype=jnp.float32) for t in terminals])
 
-        # Step 2: Estimate advantages (using the state-value baseline).
+        # Step 2: Estimate advantages (using the state-value baseline if available).
         advantages, advantages_info = self._estimate_advantage(
             flat_obs,
             flat_rewards,
@@ -134,27 +149,18 @@ class PGAgent:
 
         return info
 
-    def _calculate_q_vals(self, rewards: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+    def _calculate_q_vals(self, rewards: Sequence[np.ndarray]) -> Sequence[jnp.ndarray]:
         """
         Compute Monte Carlo estimates of Q-values.
-
-        Args:
-            rewards (Sequence[np.ndarray]): List of reward arrays for trajectories.
-
-        Returns:
-            Sequence[np.ndarray]: List of Q-value arrays corresponding to each trajectory.
         """
         q_values = []
-        if not self.use_reward_to_go:
-            # Full-trajectory return for each timestep.
-            for trajectory_rewards in rewards:
-                discounted_returns = calculate_discounted_return(trajectory_rewards, self.gamma)
-                q_values.append(discounted_returns)
-        else:
-            # Reward-to-go for each timestep.
-            for trajectory_rewards in rewards:
-                discounted_rtg = calculate_discounted_reward_to_go(trajectory_rewards, self.gamma)
-                q_values.append(discounted_rtg)
+        for trajectory_rewards in rewards:
+            rewards_jax = jnp.asarray(trajectory_rewards)
+            if not self.use_reward_to_go:
+                q_val = calculate_discounted_return(rewards_jax, self.gamma)
+            else:
+                q_val = calculate_discounted_reward_to_go(rewards_jax, self.gamma)
+            q_values.append(q_val)
         return q_values
 
     def _estimate_advantage(
@@ -165,10 +171,10 @@ class PGAgent:
         terminals: jnp.ndarray,
     ) -> tuple[jnp.ndarray, dict[str, Any]]:
         metrics: dict[str, Any] = {}
-        if not self.critic:
+        if self.critic is None:
             return q_values, metrics
 
-        def update_critic(targets: jnp.ndarray) -> float:
+        def update_critic(targets: jnp.ndarray) -> jnp.ndarray:
             total_loss = 0.0
             for _ in range(self.baseline_gradient_steps):
                 self.critic_train_state, loss = self.critic.update(
@@ -179,51 +185,21 @@ class PGAgent:
 
         if self.gae_lambda is not None:
             # --- GAE Advantage Estimation ---
-            # Compute value estimates V(s_t) using the critic.
             v = self.critic.apply(self.critic_train_state.params, obs)
-            # Convert to numpy for a simple Python loop.
-            v_np = jtu.to_numpy(v)
-            rewards_np = jtu.to_numpy(rewards)
-            terminals_np = jtu.to_numpy(terminals)
-            T = rewards_np.shape[0]
-
-            # Append a dummy V(s_{T+1}) = 0 for simpler recursive calculation.
-            v_extended = np.append(v_np, 0)
-            advantages_np = np.zeros(T + 1)
-
-            # Loop backwards over time steps.
-            for t in reversed(range(T)):
-                # If state t is terminal, then (1 - terminal) = 0.
-                non_terminal = 1.0 - terminals_np[t]
-                # Compute the temporal-difference error.
-                delta = rewards_np[t] + self.gamma * v_extended[t + 1] * non_terminal - v_extended[t]
-                # Recursive computation of advantage.
-                advantages_np[t] = delta + self.gamma * self.gae_lambda * advantages_np[t + 1] * non_terminal
-
-            # Remove the dummy advantage.
-            advantages_np = advantages_np[:-1]
-
-            targets = advantages_np + v_np
-            metrics["Critic Loss"] = update_critic(jtu.from_numpy(targets))
-            advantages_jnp = jtu.from_numpy(advantages_np)
-
+            advantages = compute_gae(rewards, v, terminals, self.gamma, self.gae_lambda)
+            targets = advantages + v
+            metrics["Critic Loss"] = update_critic(targets)
         else:
-            # --- Monte Carlo advantage estimation ---
+            # --- Monte Carlo Advantage Estimation ---
             metrics["Critic Loss"] = update_critic(q_values)
             v_updated = self.critic.apply(self.critic_train_state.params, obs)
-            advantages_jnp = q_values - v_updated
+            advantages = q_values - v_updated
 
-        return advantages_jnp, metrics
+        return advantages, metrics
 
     def get_action(self, obs: jnp.ndarray) -> jnp.ndarray:
         """
         Sample an action from the policy given an observation.
-
-        Args:
-            obs (jnp.ndarray): The current observation.
-
-        Returns:
-            jnp.ndarray: The sampled action.
         """
         self.rng, rng = jax.random.split(self.rng)
         return self.actor.get_action(obs, self.policy_train_state.params, rng)

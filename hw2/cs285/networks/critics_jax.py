@@ -141,12 +141,12 @@ class DistributionalValueCritic(nn.Module):
         return dist.mean()  # type: ignore
 
     @partial(jax.jit, static_argnums=0)
-    def sample_value(self, obs: jnp.ndarray, params: dict, rng_key) -> jnp.ndarray:
+    def sample_value(self, obs: jnp.ndarray, params: dict, rng) -> jnp.ndarray:
         """
         Returns a stochastic value prediction by sampling from the distribution.
         """
         dist = self.apply(params, obs)
-        return dist.sample(seed=rng_key) # type: ignore
+        return dist.sample(seed=rng) # type: ignore
 
     @staticmethod
     @jax.jit

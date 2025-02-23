@@ -134,7 +134,7 @@ class MLPPolicyPG(MLPPolicy):
             Policy gradient loss is negative log prob times advantage.
             We take the mean across the batch and negate since we want to maximize
             """
-            dist = self.apply(params, obs)
+            dist = state.apply_fn(params, obs)
             neg_log_probs = -dist.log_prob(actions) # type: ignore
             loss =  jnp.mean(neg_log_probs * advantages)
 

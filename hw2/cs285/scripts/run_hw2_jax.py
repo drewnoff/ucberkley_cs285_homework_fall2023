@@ -6,7 +6,6 @@ import gym
 import numpy as np
 import jax
 from cs285.infrastructure import utils
-from cs285.infrastructure import jax_util as ju
 from cs285.infrastructure.logger import Logger
 from cs285.infrastructure.action_noise_wrapper import ActionNoiseWrapper
 
@@ -32,6 +31,7 @@ def run_training_loop(args):
 
     fps = 1 / env.model.opt.timestep if hasattr(env, "model") else env.env.metadata["render_fps"]
 
+    rng, init_rng = jax.random.split(rng)
     agent = PGAgent(
         ob_dim=ob_dim,
         ac_dim=ac_dim,
@@ -46,7 +46,7 @@ def run_training_loop(args):
         baseline_learning_rate=args.baseline_learning_rate,
         baseline_gradient_steps=args.baseline_gradient_steps,
         gae_lambda=args.gae_lambda,
-        rng=rng,
+        rng=init_rng,
     )
 
     total_envsteps = 0
@@ -55,109 +55,47 @@ def run_training_loop(args):
     for itr in range(args.n_iter):
         print(f"\n********** Iteration {itr} ************")
 
-        # collect trajectories
-        obs_list = []
-        action_list = []
-        reward_list = []
-        envsteps_this_batch = 0
-        num_steps = 0
-
-        while num_steps < args.batch_size:
-            obs = env.reset()
-            done = False
-            trajectory_obs = []
-            trajectory_actions = []
-            trajectory_rewards = []
-            steps = 0
-
-            while not done and steps < max_ep_len:
-                action = ju.to_numpy(agent.get_action(obs))
-                try:
-                    next_obs, reward, done, _, _ = env.step(action)
-                except AttributeError:
-                    print("Warning: issues with numpy version compatibility, skipping this step")
-                    continue
-
-                trajectory_obs.append(obs)
-                trajectory_actions.append(action)
-                trajectory_rewards.append(reward)
-
-                obs = next_obs
-                steps += 1
-                num_steps += 1
-
-            obs_list.append(np.array(trajectory_obs))
-            action_list.append(np.array(trajectory_actions))
-            reward_list.append(np.array(trajectory_rewards))
-            envsteps_this_batch += steps
-
+        trajs, envsteps_this_batch = utils.sample_trajectories(
+            env, agent.actor, agent.policy_train_state.params, args.batch_size, max_ep_len
+        )
+        trajs_dict = {k: [traj[k] for traj in trajs] for k in trajs[0]}
         total_envsteps += envsteps_this_batch
 
         # train agent
-        train_info = agent.update(obs_list, action_list, reward_list)
+        train_info = agent.update(
+            trajs_dict["observation"],
+            trajs_dict["action"],
+            trajs_dict["reward"],
+            trajs_dict["terminal"],
+        )
 
         if itr % args.scalar_log_freq == 0:
             print("\nCollecting data for eval...")
-            eval_obs_list = []
-            eval_action_list = []
-            eval_reward_list = []
-            eval_steps = 0
+            eval_trajs, eval_envsteps_this_batch = utils.sample_trajectories(
+                env, agent.actor, agent.policy_train_state.params, args.eval_batch_size, max_ep_len
+            )
 
-            while eval_steps < args.eval_batch_size:
-                obs = env.reset()
-                done = False
-                trajectory_obs = []
-                trajectory_actions = []
-                trajectory_rewards = []
-                steps = 0
-
-                while not done and steps < max_ep_len:
-                    action = ju.to_numpy(agent.get_action(obs))
-                    try:
-                        next_obs, reward, done, _, _ = env.step(action)
-                    except AttributeError:
-                        print("Warning: issues with numpy version compatibility, skipping this step")
-                        continue
-
-                    trajectory_obs.append(obs)
-                    trajectory_actions.append(action)
-                    trajectory_rewards.append(reward)
-
-                    obs = next_obs
-                    steps += 1
-                    eval_steps += 1
-
-                eval_obs_list.append(np.array(trajectory_obs))
-                eval_action_list.append(np.array(trajectory_actions))
-                eval_reward_list.append(np.array(trajectory_rewards))
-
-            train_returns = [np.sum(rewards) for rewards in reward_list]
-            eval_returns = [np.sum(rewards) for rewards in eval_reward_list]
-
-            logs = {
-                "Train_AverageReturn": np.mean(train_returns),
-                "Train_StdReturn": np.std(train_returns),
-                "Eval_AverageReturn": np.mean(eval_returns),
-                "Eval_StdReturn": np.std(eval_returns),
-            }
-
+            logs = utils.compute_metrics(trajs, eval_trajs)
+            # compute additional metrics
             logs.update(train_info)
             logs["Train_EnvstepsSoFar"] = total_envsteps
             logs["TimeSinceStart"] = time.time() - start_time
-
             if itr == 0:
-                logs["Initial_DataCollection_AverageReturn"] = logs["Train_AverageReturn"]
+                logs["Initial_DataCollection_AverageReturn"] = logs[
+                    "Train_AverageReturn"
+                ]
 
             # perform the logging
             for key, value in logs.items():
                 print("{} : {}".format(key, value))
                 logger.log_scalar(value, key, itr)
             print("Done logging...\n\n")
+
             logger.flush()
 
         if args.video_log_freq != -1 and itr % args.video_log_freq == 0:
             print("\nCollecting video rollouts...")
-            _, sample_rng = jax.random.split(rng)
+            rng, sample_rng = jax.random.split(rng)
             eval_video_trajs = utils.sample_n_trajectories(
                 env, agent.actor, agent.policy_train_state.params, MAX_NVIDEO, max_ep_len, render=True, rng=sample_rng
             )

@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 
 from cs285.networks.policies_jax import MLPPolicyPG
-from cs285.networks.critics_jax import ValueCritic
+from cs285.networks.critics_jax import ValueCritic, DistributionalValueCritic
 
 
 def calculate_discounted_return(rewards: jnp.ndarray, gamma: float) -> jnp.ndarray:
@@ -90,6 +90,8 @@ class PGAgent:
             self.baseline_gradient_steps = baseline_gradient_steps
             self.critic_train_state = self.critic.create_train_state(rng, learning_rate=baseline_learning_rate)
         else:
+            if gae_lambda is not None:
+                raise ValueError("GAE (gae_lambda) requires use_baseline=True.")
             self.critic = None
             self.critic_train_state = None
 
@@ -120,6 +122,7 @@ class PGAgent:
         flat_rewards = jnp.concatenate([jnp.asarray(r) for r in rewards])
 
         if terminals is None:
+            # assuming complete episodes
             terminals = []
             for r in rewards:
                 t = np.zeros_like(r, dtype=np.float32)
@@ -177,27 +180,29 @@ class PGAgent:
         def update_critic(targets: jnp.ndarray) -> jnp.ndarray:
             total_loss = 0.0
             for _ in range(self.baseline_gradient_steps):
-                self.critic_train_state, loss = self.critic.update(
+                self.critic_train_state, loss = self.critic.update( # type: ignore
                     self.critic_train_state, obs, targets
                 )
                 total_loss += loss
-            return total_loss / self.baseline_gradient_steps
+            return total_loss / self.baseline_gradient_steps # type: ignore
 
         if self.gae_lambda is not None:
             # --- GAE Advantage Estimation ---
-            v = self.critic.apply(self.critic_train_state.params, obs)
+            v = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
+            # v = self.critic.sample_value(obs, self.critic_train_state.params, rng) # type: ignore
             advantages = compute_gae(rewards, v, terminals, self.gamma, self.gae_lambda)
             targets = advantages + v
             metrics["Critic Loss"] = update_critic(targets)
         else:
             # --- Monte Carlo Advantage Estimation ---
             metrics["Critic Loss"] = update_critic(q_values)
-            v_updated = self.critic.apply(self.critic_train_state.params, obs)
+            v_updated = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
+            # v_updated = self.critic.sample_value(obs, self.critic_train_state.params, rng) # type: ignore
             advantages = q_values - v_updated
 
         return advantages, metrics
 
-    def get_action(self, obs: jnp.ndarray) -> jnp.ndarray:
+    def get_action(self, obs: jnp.ndarray, rng) -> jnp.ndarray:
         """
         Sample an action from the policy given an observation.
         """

@@ -52,7 +52,7 @@ class PGAgent:
         baseline_learning_rate: float = 1e-3,
         baseline_gradient_steps: int = 1,
         normalize_advantages: bool = False,
-        use_bootstrapped_td: bool = False,
+        gae_lambda: float | None = None,
         rng = jax.random.PRNGKey(0),
     ) -> None:
         """
@@ -78,9 +78,9 @@ class PGAgent:
         self.policy_train_state = self.actor.create_train_state(init_rng, learning_rate)
 
         self.gamma = gamma
+        self.gae_lambda = gae_lambda
         self.use_reward_to_go = use_reward_to_go
         self.normalize_advantages = normalize_advantages
-        self.use_bootstrapped_td = use_bootstrapped_td
 
     def update(
         self,
@@ -95,6 +95,9 @@ class PGAgent:
         # Step 1: Compute Q-values for each (s_t, a_t) in each trajectory.
         q_values: Sequence[np.ndarray] = self._calculate_q_vals(rewards)
 
+        # flatten the lists of arrays into single arrays, so that the rest of the code can be written in a vectorized
+        # way. obs, actions, rewards, terminals, and q_values should all be arrays with a leading dimension of `batch_size`
+        # beyond this point.
         flat_obs = jtu.from_numpy(np.concatenate(obs))
         flat_actions = jtu.from_numpy(np.concatenate(actions))
         flat_qvals = jtu.from_numpy(np.concatenate(q_values))
@@ -107,7 +110,6 @@ class PGAgent:
                 t = np.zeros_like(r, dtype=np.float32)
                 t[-1] = 1.0  # last step is terminal
                 terminals.append(t)
-        # Flatten and cast terminals to float (in case they were bool)
         flat_terminals = jtu.from_numpy(np.concatenate(terminals).astype(np.float32))
 
         # Step 2: Estimate advantages (using the state-value baseline).
@@ -118,7 +120,7 @@ class PGAgent:
             flat_terminals,
         )
         if self.normalize_advantages:
-            advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-8)
+            advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
 
         # Step 3: Update the policy.
         self.policy_train_state, info = self.actor.update(
@@ -160,7 +162,7 @@ class PGAgent:
         obs: jnp.ndarray,
         rewards: jnp.ndarray,
         q_values: jnp.ndarray,
-        terminals: jnp.ndarray,  # now required and flattened
+        terminals: jnp.ndarray,
     ) -> tuple[jnp.ndarray, dict[str, Any]]:
         metrics: dict[str, Any] = {}
         if not self.critic:
@@ -169,45 +171,59 @@ class PGAgent:
         def update_critic(targets: jnp.ndarray) -> float:
             total_loss = 0.0
             for _ in range(self.baseline_gradient_steps):
-                self.critic_train_state, loss = self.critic.update( # type: ignore
+                self.critic_train_state, loss = self.critic.update(
                     self.critic_train_state, obs, targets
                 )
                 total_loss += loss
             return total_loss / self.baseline_gradient_steps
 
-        if self.use_bootstrapped_td:
-            # --- Bootstrapped TD advantage estimation ---
-            # 1) Compute the current state value estimates.
-            v = self.critic.apply(self.critic_train_state.params, obs) # type: ignore
-            # 2) To obtain V(s') for each transition, shift v one step ahead.
-            #    For the last time-step of each trajectory (where terminals==1), we want V(s')=0.
-            v_shifted = jnp.concatenate([v[1:], jnp.array([0.0])]) # type: ignore
-            v_next = jnp.where(terminals, 0.0, v_shifted)
-            # 3) The one-step TD target:
-            td_target = rewards + self.gamma * v_next
-            # 4) Update the critic to fit the bootstrapped targets.
-            metrics["Critic Loss"] = update_critic(td_target)
-            # 5) Recompute the baseline after the update.
-            v_updated = self.critic.apply(self.critic_train_state.params, obs)
-            # 6) The TD error becomes the advantage.
-            advantages_jnp = td_target - v_updated
+        if self.gae_lambda is not None:
+            # --- GAE Advantage Estimation ---
+            # Compute value estimates V(s_t) using the critic.
+            v = self.critic.apply(self.critic_train_state.params, obs)
+            # Convert to numpy for a simple Python loop.
+            v_np = jtu.to_numpy(v)
+            rewards_np = jtu.to_numpy(rewards)
+            terminals_np = jtu.to_numpy(terminals)
+            T = rewards_np.shape[0]
+
+            # Append a dummy V(s_{T+1}) = 0 for simpler recursive calculation.
+            v_extended = np.append(v_np, 0)
+            advantages_np = np.zeros(T + 1)
+
+            # Loop backwards over time steps.
+            for t in reversed(range(T)):
+                # If state t is terminal, then (1 - terminal) = 0.
+                non_terminal = 1.0 - terminals_np[t]
+                # Compute the temporal-difference error.
+                delta = rewards_np[t] + self.gamma * v_extended[t + 1] * non_terminal - v_extended[t]
+                # Recursive computation of advantage.
+                advantages_np[t] = delta + self.gamma * self.gae_lambda * advantages_np[t + 1] * non_terminal
+
+            # Remove the dummy advantage.
+            advantages_np = advantages_np[:-1]
+
+            targets = advantages_np + v_np
+            metrics["Critic Loss"] = update_critic(jtu.from_numpy(targets))
+            advantages_jnp = jtu.from_numpy(advantages_np)
+
         else:
             # --- Monte Carlo advantage estimation ---
             metrics["Critic Loss"] = update_critic(q_values)
             v_updated = self.critic.apply(self.critic_train_state.params, obs)
             advantages_jnp = q_values - v_updated
 
-        return jtu.to_numpy(advantages_jnp), metrics
+        return advantages_jnp, metrics
 
     def get_action(self, obs: jnp.ndarray) -> jnp.ndarray:
         """
         Sample an action from the policy given an observation.
 
         Args:
-            obs (np.ndarray): The current observation.
+            obs (jnp.ndarray): The current observation.
 
         Returns:
-            np.ndarray: The sampled action.
+            jnp.ndarray: The sampled action.
         """
         self.rng, rng = jax.random.split(self.rng)
         return self.actor.get_action(obs, self.policy_train_state.params, rng)

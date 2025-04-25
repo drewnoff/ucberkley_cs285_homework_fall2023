@@ -1,0 +1,69 @@
+line-length = 119
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "venv"
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "F",   # pyflakes
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "Q",   # flake8-quotes
+    "S",   # flake8-bandit
+    "C4",  # flake8-comprehensions
+    "I",   # isort
+    "RUF", # Ruff-specific rules
+    "FA", # flake8-future-annotations
+    "ISC", # https://beta.ruff.rs/docs/rules/#flake8-implicit-str-concat-isc
+    "PIE", # https://beta.ruff.rs/docs/rules/#flake8-pie-pie
+    "PT", # https://beta.ruff.rs/docs/rules/#flake8-pytest-style-pt
+    "RSE", # https://beta.ruff.rs/docs/rules/#flake8-raise-rse
+    "RET", # https://beta.ruff.rs/docs/rules/#flake8-return-ret
+    "SIM", # https://beta.ruff.rs/docs/rules/#flake8-simplify-sim
+    "N",  # pep8-naming
+    "BLE",  # flake8-blind-except    
+]
+
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "S101",  # use of assert
+    "S311",  # use of random
+    "S608",  # use of SQL formatting (possible injection)
+    "S301",  # use of pickle
+    'N812',  #  Lowercase ... imported as non-lowercase ...
+    'N817',  #  imported as acronym
+    'N806',  #  Variable in function should be lowercase
+    'N802',  #  Function name should be lowercase
+    'N803',  #  Argument name should be lowercase
+    "N805",  # used in Pydantic validator methods
+    'N815',  #  in class scope should not be mixedCase
+    'N814',  #  Camelcase imported as constant `BL`    
+    # TODO: enable following rules
+    "RUF012", # TODO: enable: Mutable class attributes
+    "PT011", # pytest.raises is too broad
+    "RET504",
+    "ISC001",  # Implicit string concatenation
+    "I001",  # isort
+    "PT001", # pytest-style
+]
+
+[lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[lint.isort]
+required-imports = ["from __future__ import annotations"]
